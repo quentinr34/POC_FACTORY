@@ -1,6 +1,43 @@
 {
   "factory_version": "0.1",
-  "last_updated": null,
-  "projects": {},
-  "recent_reports": []
+  "last_updated": "2026-05-13T14:57:25+02:00",
+  "projects": {
+    "demo/hello-factory": {
+      "name": "hello-factory",
+      "created_at": "2026-05-13T14:57:25+02:00",
+      "phases": {
+        "new-project": {
+          "status": "done",
+          "completed_at": "2026-05-13T14:57:25+02:00",
+          "report": "reports/2026-05-13T14-57-25_new-project_bootstrap-hello-factory.md"
+        },
+        "speckit-setup": {
+          "status": "pending"
+        },
+        "specify": {
+          "status": "pending"
+        },
+        "plan": {
+          "status": "pending"
+        },
+        "tasks": {
+          "status": "pending"
+        },
+        "implement": {
+          "status": "pending"
+        },
+        "commit": {
+          "status": "pending"
+        },
+        "deploy": {
+          "status": "pending"
+        }
+      },
+      "github_repo": "https://github.com/quentinr34/POC_FACTORY/tree/main/demo/hello-factory",
+      "cloud_run_url": null
+    }
+  },
+  "recent_reports": [
+    "reports/2026-05-13T14-57-25_new-project_bootstrap-hello-factory.md"
+  ]
 }
