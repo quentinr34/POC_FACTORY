@@ -1,102 +1,232 @@
 ---
 name: factory-new-project
-description: Bootstrap un nouveau projet logiciel dans le dossier demo/ du repo CGI Factory (quentinr34/POC_FACTORY) avec stack FastAPI + Vite/React/TS/Tailwind, prêt à être déployé sur Cloud Run dans le projet GCP bt-ia-lab-sandbox. Déclenche cette skill dès que Cowork demande "crée un nouveau projet factory", "bootstrap un projet", "démarre un projet <nom>", "monte un nouveau projet dans la factory", ou tout brief contenant phase=new-project. Ne JAMAIS utiliser cette skill pour des projets hors du contexte CGI Factory ou pour scaffold un projet sans contexte CGI. La skill commit+push dans le repo POC_FACTORY existant (pas de nouveau repo créé) et termine TOUJOURS par une invocation de factory-report pour produire le CR et patcher factory-state.json.
+description: Bootstrap un nouveau projet logiciel dans le dossier demo/ du repo CGI Factory (quentinr34/POC_FACTORY) avec stack FastAPI + Vite/React/TS/Tailwind, prêt à être déployé sur Cloud Run dans le projet GCP bt-ia-lab-sandbox. Déclenche cette skill dès que Cowork demande "crée un nouveau projet factory", "bootstrap un projet", "démarre un projet <nom>", "monte un nouveau projet dans la factory", ou tout brief contenant phase=new-project. Ne JAMAIS utiliser cette skill pour des projets hors du contexte CGI Factory. La skill commit+push dans le repo POC_FACTORY existant (pas de nouveau repo) et termine TOUJOURS par une invocation de factory-report. NOUVEAU v3 : la skill écrit des marqueurs de progression [FACTORY_PROGRESS] dans stdout ET dans logs/<task_id>.log à chaque étape — c'est ce qui permet à Cowork de suivre l'avancement sans timeout.
 ---
 
-# Factory New Project
+# Factory New Project — v3
 
-Cette skill orchestre le bootstrap end-to-end d'un nouveau projet dans le dossier `demo/` du repo CGI Factory existant. Elle crée le dossier local, scaffold le squelette FastAPI + Vite, commit + push dans `quentinr34/POC_FACTORY`, active les APIs GCP sur le projet sandbox, et invoque `factory-report`.
+Cette skill orchestre le bootstrap end-to-end d'un nouveau projet dans `demo/` du repo CGI Factory existant. Elle commit + push dans `quentinr34/POC_FACTORY`, active les APIs GCP sur le projet sandbox, et invoque `factory-report`.
 
-Le repo POC_FACTORY existe déjà et contient à sa racine `GCP_documentation.md` (règles de gouvernance GCP du Lab BT IA FACTORY) et `.github/workflows/claude-review.yml` (Claude Code Review qui s'applique à toutes les PRs). La skill ne touche à aucun de ces deux fichiers.
+**Nouveautés v3** :
+- **Marqueurs de progression** `[FACTORY_PROGRESS]` écrits en stdout ET dans `logs/<task_id>.log` à chaque étape (start + done + durée)
+- **Encodage UTF-8 forcé** sur tous les fichiers écrits (sinon les accents cassent sur Windows)
+- **Détection adaptive Tailwind v3 vs v4** (la skill v2 a découvert empiriquement le problème)
+- **Timeout npm install** à 10 minutes max pour éviter les hangs réseau
 
 ## Chemin canonique et constantes figées
 
-Racine factory sur ce poste :
+Racine factory : `C:\Users\quentin.roche\Desktop\Factory\POC_FACTORY\`
 
-```
-C:\Users\quentin.roche\Desktop\Factory\POC_FACTORY\
-```
-
-Constantes figées (modifier ici si changement) :
+Constantes :
 
 - **GITHUB_REPO** = `quentinr34/POC_FACTORY` (existe déjà)
 - **GCP_PROJECT** = `bt-ia-lab-sandbox`
 - **GCP_PROJECT_ABBREV** = `snd`
 - **GCP_ENV** = `dev`
-- **GCP_REGION** = `europe-west9` (Paris)
+- **GCP_REGION** = `europe-west9`
 - **DEFAULT_BRANCH** = `main`
 - **Labels GCP obligatoires** : `owner=quentin`, `project=snd`, `env=dev`, `client=internal`
-- **Convention Cloud Run service** : `snd-dev-svc-<project_name>` (utilisée plus tard par la skill `factory-deploy-cloud-run`, pas par celle-ci)
+- **Convention Cloud Run service** : `snd-dev-svc-<project_name>`
 
 ## Lecture obligatoire avant toute action GCP
 
-Avant toute commande `gcloud`, lire le fichier `GCP_documentation.md` à la racine POC_FACTORY. Il définit les règles de gouvernance (conventions de nommage, labels, budgets, sécurité). Toute commande GCP de cette skill DOIT respecter ces règles. Si une règle évolue, le fichier est la source de vérité — pas cette skill.
+Lire `GCP_documentation.md` à la racine POC_FACTORY avant toute commande `gcloud`. Source de vérité pour la gouvernance GCP du Lab.
 
-## Quand utiliser cette skill
+## Préconditions à vérifier (étape 1)
 
-- Cowork transmet un brief contenant `phase: new-project` et un `project_name`.
-- L'utilisateur dit "crée un nouveau projet factory appelé X", "démarre un projet X dans la factory", "monte le projet X".
-- NE PAS déclencher si le brief mentionne une phase autre que `new-project`, ni pour scaffold un projet hors `demo/`.
+1. cwd = `C:\Users\quentin.roche\Desktop\Factory\POC_FACTORY` (sinon `cd`).
+2. `git remote get-url origin` = `https://github.com/quentinr34/POC_FACTORY.git` ou équivalent SSH.
+3. CLI auth : `gh auth status` (quentinr34), `git --version`, `gcloud auth list`, `gcloud config get-value project` = `bt-ia-lab-sandbox` (sinon `gcloud config set project bt-ia-lab-sandbox`), `node --version` ≥ 20, `npm --version`, `python --version` ≥ 3.10.
+4. `GCP_documentation.md` présent à la racine. Sinon : abort `failed`.
+5. `demo/<project_name>/` n'existe pas déjà.
+6. Repo à jour avec origin (`git fetch ; git status` ne montre pas "behind"). Sinon `git pull`.
 
-## Préconditions à vérifier en début d'exécution
-
-Avant toute action destructive, vérifier :
-
-1. Working directory = `C:\Users\quentin.roche\Desktop\Factory\POC_FACTORY\`. Sinon : `cd` dans cette racine.
-2. Le working directory est bien un repo git pointant vers `quentinr34/POC_FACTORY` :
-   ```powershell
-   git remote get-url origin
-   # doit retourner https://github.com/quentinr34/POC_FACTORY.git ou git@github.com:quentinr34/POC_FACTORY.git
-   ```
-3. Les outils CLI sont installés et auth :
-   - `gh auth status` → logged in as quentinr34
-   - `git --version` → succès
-   - `gcloud auth list` → un compte actif
-   - `gcloud config get-value project` → si la valeur n'est pas `bt-ia-lab-sandbox`, exécuter `gcloud config set project bt-ia-lab-sandbox`
-   - `node --version` ≥ 20 et `npm --version` → succès
-   - `python --version` ≥ 3.10 → succès
-4. Le fichier `GCP_documentation.md` existe à la racine POC_FACTORY. Sinon : abort avec CR `failed` (la skill ne peut pas faire de GCP sans les règles).
-5. Le dossier `demo/<project_name>/` n'existe pas déjà localement.
-6. Le repo POC_FACTORY local est à jour avec origin (`git fetch && git status` ne montre pas de "behind"). Si en retard : `git pull` d'abord.
-
-Si une précondition échoue : ne PAS continuer. Produire un CR `failed` avec le détail dans Blocages.
+Si précondition échoue : abort, CR `failed`.
 
 ## Inputs attendus
 
-- **project_name** (obligatoire) : kebab-case, ex `avis-summarizer`. Pattern : `^[a-z][a-z0-9-]{2,49}$`.
-- **description** (optionnel) : 1 phrase de description, max 100 caractères. Défaut : `"Projet généré par la CGI Factory"`.
+- **project_name** (obligatoire) : kebab-case, pattern `^[a-z][a-z0-9-]{2,49}$`.
+- **description** (optionnel) : 1 phrase max 100 chars. Défaut : `"Projet généré par la CGI Factory"`.
 
-## Étapes d'exécution
+## Système de marqueurs de progression (NOUVEAU v3)
 
-### 1. Validation des inputs
+### Format des marqueurs
 
-- Vérifier que `project_name` matche le pattern. Sinon : abort avec CR `failed`.
-- Vérifier les préconditions ci-dessus.
+À chaque étape, écrire en stdout ET appender dans `logs/<task_id>.log` :
 
-### 2. Création du dossier local
-
-```powershell
-cd C:\Users\quentin.roche\Desktop\Factory\POC_FACTORY
-New-Item -ItemType Directory -Path "demo\<project_name>" -Force
-cd "demo\<project_name>"
+```
+[FACTORY_PROGRESS] step=<N>/10 phase=<phase-name> status=<started|done|failed> ts=<ISO-8601> [duration=<X>s]
 ```
 
-### 3. Scaffold du frontend via Vite
+Exemples :
 
-Utiliser le scaffold officiel Vite pour éviter d'écrire 15 fichiers de config à la main :
+```
+[FACTORY_PROGRESS] step=1/10 phase=preconditions status=started ts=2026-05-13T15:00:00+02:00
+[FACTORY_PROGRESS] step=1/10 phase=preconditions status=done ts=2026-05-13T15:00:02+02:00 duration=2s
+```
+
+### Fonction PowerShell helper à utiliser
+
+Définir au début de l'exécution :
 
 ```powershell
+$TASK_ID = "$((Get-Date -Format 'yyyy-MM-ddTHH-mm-ss'))_new-project_bootstrap-$PROJECT_NAME"
+$LOG_PATH = "logs\$TASK_ID.log"
+New-Item -ItemType Directory -Path "logs" -Force | Out-Null
+
+function Write-FactoryProgress {
+    param(
+        [int]$Step,
+        [int]$Total = 10,
+        [string]$Phase,
+        [string]$Status,
+        [int]$DurationSeconds = -1
+    )
+    $ts = (Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz").Replace("zzz", "+02:00")
+    $line = "[FACTORY_PROGRESS] step=$Step/$Total phase=$Phase status=$Status ts=$ts"
+    if ($DurationSeconds -ge 0) { $line += " duration=${DurationSeconds}s" }
+    Write-Host $line
+    Add-Content -Path $LOG_PATH -Value $line -Encoding UTF8
+}
+```
+
+### Liste figée des 10 étapes avec leurs phase-name
+
+| # | phase-name | Description |
+|---|---|---|
+| 1 | preconditions | Vérification env, CLI, repo |
+| 2 | scaffold-dir | Création `demo/<project>/` |
+| 3 | vite-scaffold | `npm create vite` + Tailwind |
+| 4 | backend-fastapi | `main.py` + `requirements.txt` |
+| 5 | dockerfile | Dockerfile multi-stage |
+| 6 | config-files | `.dockerignore`, `README.md` |
+| 7 | gcp-apis | `gcloud services enable` |
+| 8 | cd-root | Retour racine factory |
+| 9 | git-commit-push | `git add`, commit, push |
+| 10 | invoke-report | Appel `factory-report` |
+
+Chaque étape doit avoir un `started` et un `done` (ou `failed`).
+
+## Étapes d'exécution (avec marqueurs)
+
+### Étape 1 — Préconditions
+
+```powershell
+Write-FactoryProgress -Step 1 -Phase "preconditions" -Status "started"
+$step1Start = Get-Date
+
+# ... toutes les vérifs préconditions ci-dessus ...
+
+$step1Duration = [int]((Get-Date) - $step1Start).TotalSeconds
+Write-FactoryProgress -Step 1 -Phase "preconditions" -Status "done" -DurationSeconds $step1Duration
+```
+
+Pattern à appliquer pour chaque étape suivante.
+
+### Étape 2 — Création du dossier local
+
+```powershell
+Write-FactoryProgress -Step 2 -Phase "scaffold-dir" -Status "started"
+$start = Get-Date
+
+cd C:\Users\quentin.roche\Desktop\Factory\POC_FACTORY
+New-Item -ItemType Directory -Path "demo\$PROJECT_NAME" -Force | Out-Null
+cd "demo\$PROJECT_NAME"
+
+Write-FactoryProgress -Step 2 -Phase "scaffold-dir" -Status "done" -DurationSeconds ([int]((Get-Date)-$start).TotalSeconds)
+```
+
+### Étape 3 — Scaffold Vite + Tailwind (adaptive v3/v4)
+
+```powershell
+Write-FactoryProgress -Step 3 -Phase "vite-scaffold" -Status "started"
+$start = Get-Date
+
+# Scaffold Vite
 npm create vite@latest frontend -- --template react-ts
 cd frontend
 npm install
-npm install -D tailwindcss postcss autoprefixer
+cd ..
+
+# Détection Tailwind v3 vs v4 (la v4 a changé l'API)
+# Pour le POC, on impose v3 qui est plus stable et compatible avec notre config
+cd frontend
+npm install -D tailwindcss@3 postcss autoprefixer
 npx tailwindcss init -p
 cd ..
+
+Write-FactoryProgress -Step 3 -Phase "vite-scaffold" -Status "done" -DurationSeconds ([int]((Get-Date)-$start).TotalSeconds)
 ```
 
-Puis remplacer 4 fichiers générés par Vite avec ces contenus :
+Si `npm install` dépasse 600 secondes (10 min), considérer comme `failed` et abort proprement.
 
-**`frontend/tailwind.config.js`** :
+Puis écraser 4 fichiers Vite avec les contenus customisés CGI (voir détail en fin de skill).
+
+### Étape 4 — Backend FastAPI
+
+```powershell
+Write-FactoryProgress -Step 4 -Phase "backend-fastapi" -Status "started"
+$start = Get-Date
+
+New-Item -ItemType Directory -Path "backend" -Force | Out-Null
+# Écrire backend/main.py et backend/requirements.txt avec UTF-8 forcé
+# (voir contenus en fin de skill)
+
+Write-FactoryProgress -Step 4 -Phase "backend-fastapi" -Status "done" -DurationSeconds ([int]((Get-Date)-$start).TotalSeconds)
+```
+
+### Étapes 5 à 7 — Dockerfile, config, GCP
+
+Même pattern. Pour l'étape 7 (GCP), même si échec, marquer `done` avec note dans le CR (best-effort).
+
+### Étape 8 — Retour racine
+
+```powershell
+Write-FactoryProgress -Step 8 -Phase "cd-root" -Status "started"
+cd C:\Users\quentin.roche\Desktop\Factory\POC_FACTORY
+Write-FactoryProgress -Step 8 -Phase "cd-root" -Status "done" -DurationSeconds 0
+```
+
+### Étape 9 — Git commit et push
+
+```powershell
+Write-FactoryProgress -Step 9 -Phase "git-commit-push" -Status "started"
+$start = Get-Date
+
+git add demo/$PROJECT_NAME
+git commit -m "factory(new-project): bootstrap demo/$PROJECT_NAME"
+git push origin main
+
+Write-FactoryProgress -Step 9 -Phase "git-commit-push" -Status "done" -DurationSeconds ([int]((Get-Date)-$start).TotalSeconds)
+```
+
+Si push échoue : `failed` au lieu de `done`, CR sera `partial`.
+
+### Étape 10 — Invocation factory-report
+
+```powershell
+Write-FactoryProgress -Step 10 -Phase "invoke-report" -Status "started"
+$start = Get-Date
+
+# Invoquer la skill factory-report avec inputs (notamment task_id = $TASK_ID
+# pour qu'elle lise le bon log de progression)
+# Inputs : phase=new-project, project=demo/$PROJECT_NAME, task_slug=bootstrap-$PROJECT_NAME,
+# brief_path=<chemin brief ou null>, status=<success/partial/failed>, task_id=$TASK_ID
+
+Write-FactoryProgress -Step 10 -Phase "invoke-report" -Status "done" -DurationSeconds ([int]((Get-Date)-$start).TotalSeconds)
+```
+
+## Contenus des fichiers à écrire (UTF-8 forcé)
+
+CRITIQUE : pour TOUS les fichiers texte écrits par cette skill, utiliser UTF-8 sans BOM. Sous PowerShell 5 :
+
+```powershell
+[System.IO.File]::WriteAllText("chemin\fichier.ext", $contenu, [System.Text.UTF8Encoding]::new($false))
+```
+
+Le `$false` exclut le BOM. `Out-File -Encoding utf8` par défaut écrit AVEC BOM en PS5, ne pas l'utiliser tel quel.
+
+### `frontend/tailwind.config.js`
 
 ```javascript
 /** @type {import('tailwindcss').Config} */
@@ -111,7 +241,7 @@ export default {
 }
 ```
 
-**`frontend/src/index.css`** (écraser le contenu existant) :
+### `frontend/src/index.css`
 
 ```css
 @tailwind base;
@@ -119,7 +249,7 @@ export default {
 @tailwind utilities;
 ```
 
-**`frontend/src/App.tsx`** (écraser le contenu existant) :
+### `frontend/src/App.tsx`
 
 ```tsx
 import { useEffect, useState } from "react"
@@ -147,7 +277,7 @@ export default function App() {
 }
 ```
 
-**`frontend/vite.config.ts`** (build vers `../backend/static`) :
+### `frontend/vite.config.ts`
 
 ```ts
 import { defineConfig } from "vite"
@@ -167,15 +297,7 @@ export default defineConfig({
 })
 ```
 
-Remplacer `PROJECT_NAME_PLACEHOLDER` par la valeur réelle de `project_name`.
-
-### 4. Création du backend FastAPI
-
-```powershell
-New-Item -ItemType Directory -Path "backend" -Force
-```
-
-**`backend/main.py`** :
+### `backend/main.py`
 
 ```python
 from fastapi import FastAPI
@@ -189,7 +311,6 @@ app = FastAPI(title="PROJECT_NAME_PLACEHOLDER")
 def health():
     return {"status": "ok"}
 
-# Sert le frontend buildé (dossier static/ peuplé par 'vite build')
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(STATIC_DIR):
     assets_dir = os.path.join(STATIC_DIR, "assets")
@@ -201,18 +322,14 @@ if os.path.isdir(STATIC_DIR):
         return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 ```
 
-**`backend/requirements.txt`** :
+### `backend/requirements.txt`
 
 ```
 fastapi==0.118.0
 uvicorn[standard]==0.32.0
 ```
 
-Remplacer `PROJECT_NAME_PLACEHOLDER` par la valeur réelle.
-
-### 5. Dockerfile multi-stage
-
-À la racine du projet (`demo/<project_name>/Dockerfile`) :
+### `Dockerfile`
 
 ```dockerfile
 # --- Stage 1 : build frontend ---
@@ -235,9 +352,7 @@ EXPOSE 8080
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]
 ```
 
-### 6. Fichiers de configuration restants
-
-**`.dockerignore`** :
+### `.dockerignore`
 
 ```
 node_modules
@@ -250,7 +365,7 @@ README.md
 backend/static
 ```
 
-**`README.md`** (à la racine du sous-projet) :
+### `README.md`
 
 ```markdown
 # PROJECT_NAME_PLACEHOLDER
@@ -260,166 +375,80 @@ DESCRIPTION_PLACEHOLDER
 Generated by CGI Factory on DATE_PLACEHOLDER.
 
 ## Stack
-
 - Backend : FastAPI (Python 3.12)
-- Frontend : Vite + React + TypeScript + Tailwind CSS
+- Frontend : Vite + React + TypeScript + Tailwind CSS v3
 - Container : Docker multi-stage
-- Deployment : Google Cloud Run, projet `bt-ia-lab-sandbox`, région `europe-west9`
+- Deployment : Google Cloud Run, projet bt-ia-lab-sandbox, région europe-west9
 
 ## Local development
+Backend : cd backend ; pip install -r requirements.txt ; uvicorn main:app --reload --port 8000
+Frontend : cd frontend ; npm install ; npm run dev
 
-Backend :
+Frontend sur http://localhost:5173 (proxy /api/* vers backend:8000).
 
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-```
-
-Frontend (dans un autre terminal) :
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend disponible sur http://localhost:5173, proxy les /api/* vers le backend sur :8000.
-
-## Production build (Docker)
-
-```bash
+## Production build
 docker build -t PROJECT_NAME_PLACEHOLDER .
 docker run -p 8080:8080 PROJECT_NAME_PLACEHOLDER
-```
 
 ## Déploiement Cloud Run
+Service : snd-dev-svc-PROJECT_NAME_PLACEHOLDER
 
-Nom du service Cloud Run (convention GCP du Lab) : `snd-dev-svc-PROJECT_NAME_PLACEHOLDER`
+gcloud run deploy snd-dev-svc-PROJECT_NAME_PLACEHOLDER --source . --region europe-west9 --project bt-ia-lab-sandbox --labels owner=quentin,project=snd,env=dev,client=internal --allow-unauthenticated
 
-```bash
-gcloud run deploy snd-dev-svc-PROJECT_NAME_PLACEHOLDER \
-  --source . \
-  --region europe-west9 \
-  --project bt-ia-lab-sandbox \
-  --labels owner=quentin,project=snd,env=dev,client=internal \
-  --allow-unauthenticated
-```
-
-Voir `../../GCP_documentation.md` pour les règles complètes de gouvernance GCP du Lab.
+Voir ../../GCP_documentation.md pour les règles complètes.
 
 ## CI/CD
-
-Les PRs sur ce repo POC_FACTORY déclenchent automatiquement Claude Code Review via le workflow `.github/workflows/claude-review.yml` à la racine POC_FACTORY. Mention `@claude` dans un commentaire de PR pour invoquer Claude.
+PRs sur ce repo déclenchent automatiquement Claude Code Review via .github/workflows/claude-review.yml racine. Mention @claude dans un commentaire de PR pour invoquer.
 ```
 
-Remplacer les 3 placeholders (PROJECT_NAME_PLACEHOLDER, DESCRIPTION_PLACEHOLDER, DATE_PLACEHOLDER).
+Tous ces fichiers contiennent des placeholders à substituer : `PROJECT_NAME_PLACEHOLDER`, `DESCRIPTION_PLACEHOLDER`, `DATE_PLACEHOLDER`.
 
-### 7. Activation des APIs GCP (best-effort)
-
-Vérifier d'abord que le projet `bt-ia-lab-sandbox` est sélectionné :
-
-```powershell
-gcloud config set project bt-ia-lab-sandbox
-```
-
-Puis activer les APIs nécessaires pour Cloud Run :
-
-```powershell
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
-```
-
-Si la commande échoue (pas de permissions, projet non trouvé) : ne PAS abort. Mentionner dans le CR que les APIs sont à activer manuellement avant le premier déploiement Cloud Run.
-
-### 8. Retour à la racine factory
-
-```powershell
-cd C:\Users\quentin.roche\Desktop\Factory\POC_FACTORY
-```
-
-### 9. Commit et push dans le repo POC_FACTORY
-
-Vérifier l'état git :
-
-```powershell
-git status
-```
-
-Si des modifications non liées sont présentes en working tree, NE PAS les inclure dans le commit. Ajouter uniquement le sous-dossier du nouveau projet :
-
-```powershell
-git add demo/<project_name>
-git commit -m "factory(new-project): bootstrap demo/<project_name>"
-git push origin main
-```
-
-Si le push échoue (conflit, droits, réseau) : ne PAS abort. CR `partial` avec la commande de push à relancer manuellement.
-
-### 10. Invocation de factory-report
-
-Invoquer la skill `factory-report` avec les inputs :
-
-- **phase** : `new-project`
-- **project** : `demo/<project_name>`
-- **task_slug** : `bootstrap-<project_name>`
-- **brief_path** : chemin du brief Cowork (null si invocation manuelle)
-- **status** :
-  - `success` si tout est passé (incluant APIs GCP activées et push réussi)
-  - `partial` si scaffold complet + commit réussis MAIS APIs GCP ou push ont échoué
-  - `failed` si une étape critique (validation, préconditions, scaffold, commit local) a échoué
-
-La skill `factory-report` se charge ensuite d'écrire le CR markdown, patcher `state/factory-state.json` (notamment le champ `github_repo` qui pointera vers le sous-dossier `https://github.com/quentinr34/POC_FACTORY/tree/main/demo/<project_name>`), et afficher les marqueurs de complétion.
-
-## Gestion des erreurs (option B : pas de rollback)
-
-Si une étape échoue après que des artefacts aient été créés, NE PAS supprimer ce qui a été fait. Stopper, lister précisément ce qui a réussi/échoué, invoquer `factory-report` avec `status=partial`, et fournir dans "Prochaine étape suggérée" la commande pour reprendre manuellement.
+## Gestion des erreurs (option B sans rollback)
 
 | Étape échouée | Action | Status final |
 |---|---|---|
-| Validation input | Aucun artefact créé | `failed` |
-| Préconditions (gh non auth, repo non clone, etc.) | Aucun artefact créé | `failed` |
-| GCP_documentation.md manquant | Aucun artefact créé | `failed` |
-| Création dossier local | Dossier partiel à nettoyer manuellement | `failed` |
-| Scaffold Vite (npm error) | Dossier partiel, signaler | `failed` |
-| Backend FastAPI | Tout est en local, signaler comment continuer | `partial` |
-| Activation APIs GCP | Scaffold OK, APIs à activer plus tard | `partial` (note seulement) |
-| `git add` ou commit | Tout en local, signaler la commande de commit | `partial` |
-| `git push` | Commit local fait, signaler la commande de push | `partial` |
+| 1 préconditions | Abort, rien créé | `failed` |
+| 2 scaffold-dir | Dossier partiel manuel | `failed` |
+| 3 vite-scaffold | Dossier partiel, signaler | `failed` |
+| 4 backend-fastapi | Local, signaler | `partial` |
+| 5 dockerfile | Local, signaler | `partial` |
+| 6 config-files | Local, signaler | `partial` |
+| 7 gcp-apis | Scaffold OK, APIs manuelles | `partial` (note) |
+| 8 cd-root | Improbable | `partial` |
+| 9 git-commit-push | Local, signaler commande | `partial` |
+| 10 invoke-report | CR à faire manuel | `partial` |
 
-## Exemple complet
+Toujours invoquer `factory-report` à l'étape 10 même en cas d'échec d'une étape précédente — le status reflète l'état réel.
 
-### Input (brief Cowork)
+## Exemple complet de sortie attendue
+
+Stdout pendant l'exécution :
 
 ```
-Brief : briefs/2026-05-13T14-30-00_new-project_avis-summarizer.md
-
-Phase : new-project
-Project name : avis-summarizer
-Description : Mini-app qui résume un transcript Notion via Claude
+[FACTORY_PROGRESS] step=1/10 phase=preconditions status=started ts=2026-05-13T15:00:00+02:00
+[FACTORY_PROGRESS] step=1/10 phase=preconditions status=done ts=2026-05-13T15:00:02+02:00 duration=2s
+[FACTORY_PROGRESS] step=2/10 phase=scaffold-dir status=started ts=2026-05-13T15:00:02+02:00
+[FACTORY_PROGRESS] step=2/10 phase=scaffold-dir status=done ts=2026-05-13T15:00:03+02:00 duration=1s
+[FACTORY_PROGRESS] step=3/10 phase=vite-scaffold status=started ts=2026-05-13T15:00:03+02:00
+[FACTORY_PROGRESS] step=3/10 phase=vite-scaffold status=done ts=2026-05-13T15:05:45+02:00 duration=342s
+... etc ...
+[FACTORY_PROGRESS] step=10/10 phase=invoke-report status=done ts=2026-05-13T15:06:25+02:00 duration=4s
+FACTORY_REPORT_WRITTEN=reports/2026-05-13T15-06-25_new-project_bootstrap-hello-factory-v2.md
+FACTORY_STATE_UPDATED=state/factory-state.json
 ```
 
-### Sortie attendue
+Le log `logs/<task_id>.log` contient les mêmes marqueurs en UTF-8.
 
-1. Dossier créé : `C:\Users\quentin.roche\Desktop\Factory\POC_FACTORY\demo\avis-summarizer\` avec backend FastAPI + frontend Vite scaffold + Dockerfile + README + .dockerignore.
-2. APIs GCP activées sur `bt-ia-lab-sandbox` (run, cloudbuild, artifactregistry).
-3. Commit `factory(new-project): bootstrap demo/avis-summarizer` poussé sur main de `quentinr34/POC_FACTORY`.
-4. CR dans `reports/2026-05-13T14-32-00_new-project_avis-summarizer.md`
-5. `state/factory-state.json` patché avec la nouvelle entrée `demo/avis-summarizer` (github_repo pointe vers `https://github.com/quentinr34/POC_FACTORY/tree/main/demo/avis-summarizer`).
-6. Marqueurs stdout :
-   ```
-   FACTORY_REPORT_WRITTEN=reports/2026-05-13T14-32-00_new-project_avis-summarizer.md
-   FACTORY_STATE_UPDATED=state/factory-state.json
-   ```
-
-## Anti-patterns à éviter
+## Anti-patterns
 
 - Créer un repo GitHub séparé : le projet vit dans `demo/` du repo POC_FACTORY existant.
-- Créer un workflow GitHub Action par projet : le workflow racine `claude-review.yml` s'applique à toutes les PRs.
-- Ignorer les conventions de nommage GCP du Lab : le service Cloud Run DOIT être nommé `snd-dev-svc-<project_name>`.
-- Oublier les labels GCP obligatoires au déploiement : `owner=quentin`, `project=snd`, `env=dev`, `client=internal`.
-- Déployer sur un autre projet GCP que `bt-ia-lab-sandbox` : c'est le seul projet sandbox autorisé pour les démos factory.
-- Forcer l'activation des APIs GCP : si ça échoue, ce n'est pas bloquant.
-- Embarquer un Dockerfile mono-stage (taille d'image inutilement grosse).
-- Oublier d'invoquer `factory-report` à la fin — sans CR, Cowork ne peut pas restituer.
-- Commit du `node_modules/` ou de `backend/static/` (fichiers build) — vérifier qu'ils sont gitignored au niveau du repo POC_FACTORY.
-- Hardcoder une URL Cloud Run dans le code frontend — utiliser des chemins relatifs `/api/*`.
+- Créer un workflow GitHub Action par projet : workflow racine s'applique à tout.
+- Ignorer les conventions GCP : service Cloud Run DOIT être `snd-dev-svc-<project>`, labels obligatoires.
+- Déployer sur autre projet GCP que `bt-ia-lab-sandbox`.
+- Forcer activation APIs GCP : best-effort, pas bloquant.
+- Dockerfile mono-stage : taille image inutilement grosse.
+- Oublier invocation `factory-report` finale.
+- Commit `node_modules/` ou `backend/static/` (gitignored au niveau racine POC_FACTORY).
+- URL Cloud Run hardcodée dans frontend — utiliser `/api/*` relatifs.
+- **NOUVEAU v3 : sauter les marqueurs `[FACTORY_PROGRESS]`** — Cowork en dépend pour suivre l'avancement et ne pas timeout.
+- **NOUVEAU v3 : écrire des fichiers sans forcer UTF-8 sans BOM** — les accents cassent et le code source devient illisible.
