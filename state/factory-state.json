@@ -1,6 +1,6 @@
 {
   "factory_version": "0.1",
-  "last_updated": "2026-05-13T14:57:25+02:00",
+  "last_updated": "2026-05-13T17:34:30+02:00",
   "projects": {
     "demo/hello-factory": {
       "name": "hello-factory",
@@ -35,9 +35,81 @@
       },
       "github_repo": "https://github.com/quentinr34/POC_FACTORY/tree/main/demo/hello-factory",
       "cloud_run_url": null
+    },
+    "demo/hello-factory-v2": {
+      "name": "hello-factory-v2",
+      "created_at": "2026-05-13T16:58:30+02:00",
+      "phases": {
+        "new-project": {
+          "status": "done",
+          "completed_at": "2026-05-13T16:58:30+02:00",
+          "report": "reports/2026-05-13T16-53-18_new-project_bootstrap-hello-factory-v2.md",
+          "duration_seconds": 279
+        },
+        "speckit-setup": {
+          "status": "pending"
+        },
+        "specify": {
+          "status": "pending"
+        },
+        "plan": {
+          "status": "pending"
+        },
+        "tasks": {
+          "status": "pending"
+        },
+        "implement": {
+          "status": "pending"
+        },
+        "commit": {
+          "status": "pending"
+        },
+        "deploy": {
+          "status": "pending"
+        }
+      },
+      "github_repo": "https://github.com/quentinr34/POC_FACTORY/tree/main/demo/hello-factory-v2",
+      "cloud_run_url": null
+    },
+    "demo/hello-factory-v3": {
+      "name": "hello-factory-v3",
+      "created_at": "2026-05-13T17:34:30+02:00",
+      "phases": {
+        "new-project": {
+          "status": "done",
+          "completed_at": "2026-05-13T17:34:30+02:00",
+          "report": "reports/2026-05-13T17-31-35_new-project_bootstrap-hello-factory-v3.md",
+          "duration_seconds": 152
+        },
+        "speckit-setup": {
+          "status": "pending"
+        },
+        "specify": {
+          "status": "pending"
+        },
+        "plan": {
+          "status": "pending"
+        },
+        "tasks": {
+          "status": "pending"
+        },
+        "implement": {
+          "status": "pending"
+        },
+        "commit": {
+          "status": "pending"
+        },
+        "deploy": {
+          "status": "pending"
+        }
+      },
+      "github_repo": "https://github.com/quentinr34/POC_FACTORY/tree/main/demo/hello-factory-v3",
+      "cloud_run_url": null
     }
   },
   "recent_reports": [
+    "reports/2026-05-13T17-31-35_new-project_bootstrap-hello-factory-v3.md",
+    "reports/2026-05-13T16-53-18_new-project_bootstrap-hello-factory-v2.md",
     "reports/2026-05-13T14-57-25_new-project_bootstrap-hello-factory.md"
   ]
 }
