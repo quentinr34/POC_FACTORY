@@ -1,0 +1,47 @@
+# === LOGS techniques (dossier tracké, contenu non versionné) ===
+logs/*
+!logs/.gitkeep
+
+# === Sous-projets démo : artefacts de build (node + python) ===
+demo/*/frontend/node_modules/
+demo/*/frontend/dist/
+demo/*/backend/static/
+demo/*/backend/__pycache__/
+demo/*/backend/.venv/
+demo/*/backend/venv/
+demo/*/backend/*.pyc
+
+# === Build et caches Python / Node génériques ===
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.venv/
+venv/
+.tox/
+.pytest_cache/
+
+# === IDE et éditeurs ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === Systèmes d'exploitation ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Secrets (zéro tolérance — règle Lab BT IA FACTORY, cf GCP_documentation.md §7) ===
+*.env
+*.env.local
+*credentials*
+*secret*
+*.pem
+*.key
+service-account-*.json
+
+# === Fichiers temporaires factory ===
+*.tmp
+*.orig
+*.bak
