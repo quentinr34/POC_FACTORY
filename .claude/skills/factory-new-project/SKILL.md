@@ -1,15 +1,15 @@
 ---
 name: factory-new-project
-description: Bootstrap un nouveau projet logiciel dans le dossier demo/ du repo CGI Factory (quentinr34/POC_FACTORY) avec stack FastAPI + Vite/React/TS/Tailwind, prêt à être déployé sur Cloud Run dans le projet GCP bt-ia-lab-sandbox. Déclenche cette skill dès que Cowork demande "crée un nouveau projet factory", "bootstrap un projet", "démarre un projet <nom>", "monte un nouveau projet dans la factory", ou tout brief contenant phase=new-project. Ne JAMAIS utiliser cette skill pour des projets hors du contexte CGI Factory. La skill commit+push dans le repo POC_FACTORY existant (pas de nouveau repo) et termine TOUJOURS par une invocation de factory-report. Les marqueurs de progression [FACTORY_PROGRESS] sont émis UNIQUEMENT en stdout (pas de fichier log interne — la persistance est gérée par le pilote Cowork via -RedirectStandardOutput).
+description: Bootstrap un nouveau projet logiciel dans le dossier demo/ du repo CGI Factory (quentinr34/POC_FACTORY) avec stack FastAPI + Vite/React/TS/Tailwind, prêt à être déployé sur Cloud Run dans le projet GCP bt-ia-lab-sandbox. Déclenche cette skill dès que Cowork demande "crée un nouveau projet factory", "bootstrap un projet", "démarre un projet <nom>", "monte un nouveau projet dans la factory", ou tout brief contenant phase=new-project. Ne JAMAIS utiliser cette skill pour des projets hors du contexte CGI Factory. La skill commit+push dans le repo POC_FACTORY existant (pas de nouveau repo) et termine TOUJOURS par une invocation de factory-report. Les marqueurs de progression [FACTORY_PROGRESS] sont émis EN STDOUT (pour Claude Code) ET dans logs/<task_id>.progress.log via FileStream avec AutoFlush+FileShare.Read (lecture concurrente Cowork sans lock).
 ---
 
-# Factory New Project — v3.1
+# Factory New Project — v3.2
 
 Cette skill orchestre le bootstrap end-to-end d'un nouveau projet dans `demo/` du repo CGI Factory existant. Elle commit + push dans `quentinr34/POC_FACTORY`, active les APIs GCP sur le projet sandbox, et invoque `factory-report`.
 
-**Nouveautés v3.1** (correction du blocage Windows file locking détecté en v3) :
-- **Suppression du double-write log fichier** : les marqueurs `[FACTORY_PROGRESS]` sont écrits UNIQUEMENT en stdout. La persistance est gérée par Cowork via `Start-Process -RedirectStandardOutput`. Plus de conflit IOException sur Windows.
-- Le reste de v3 (UTF-8 forcé, Tailwind v3 figé, timeout npm, etc.) est conservé.
+**Nouveautés v3.2** (correction du buffering stdout détecté en v3.1) :
+- **Double-write rétabli mais SAFE** : les marqueurs `[FACTORY_PROGRESS]` sont écrits en stdout (pour Claude Code) ET dans un fichier dédié `logs/<task_id>.progress.log` ouvert via FileStream .NET avec `AutoFlush=true` et `FileShare.Read`. Cowork peut lire ce fichier en parallèle SANS lock (chacun a son propre fichier, plus de conflit avec `claude-stdout.log`).
+- Le reste de v3.1 (UTF-8 forcé, Tailwind v3 figé, timeout npm) est conservé.
 
 ## Chemin canonique et constantes figées
 
@@ -28,14 +28,14 @@ Constantes :
 
 ## Lecture obligatoire avant toute action GCP
 
-Lire `GCP_documentation.md` à la racine POC_FACTORY avant toute commande `gcloud`. Source de vérité pour la gouvernance GCP du Lab.
+Lire `GCP_documentation.md` à la racine POC_FACTORY avant toute commande `gcloud`.
 
 ## Préconditions à vérifier (étape 1)
 
 1. cwd = `C:\Users\quentin.roche\Desktop\Factory\POC_FACTORY` (sinon `cd`).
-2. `git remote get-url origin` = `https://github.com/quentinr34/POC_FACTORY.git` ou équivalent SSH.
-3. CLI auth : `gh auth status` (quentinr34), `git --version`, `gcloud auth list`, `gcloud config get-value project` = `bt-ia-lab-sandbox`, `node --version` ≥ 20, `npm --version`, `python --version` ≥ 3.10.
-4. `GCP_documentation.md` présent à la racine. Sinon : abort `failed`.
+2. `git remote get-url origin` = `https://github.com/quentinr34/POC_FACTORY.git`.
+3. CLI auth : `gh auth status`, `git --version`, `gcloud auth list`, `gcloud config get-value project` = `bt-ia-lab-sandbox`, `node --version` ≥ 20, `npm --version`, `python --version` ≥ 3.10.
+4. `GCP_documentation.md` présent. Sinon : abort `failed`.
 5. `demo/<project_name>/` n'existe pas déjà.
 6. Repo à jour avec origin. Sinon `git pull`.
 
@@ -44,23 +44,47 @@ Si précondition échoue : abort, CR `failed`.
 ## Inputs attendus
 
 - **project_name** (obligatoire) : kebab-case, pattern `^[a-z][a-z0-9-]{2,49}$`.
-- **description** (optionnel) : 1 phrase max 100 chars. Défaut : `"Projet généré par la CGI Factory"`.
+- **description** (optionnel) : 1 phrase max 100 chars.
 
-## Système de marqueurs de progression (CORRIGÉ v3.1)
+## Système de marqueurs de progression (CORRIGÉ v3.2 — double-write safe)
 
 ### Format des marqueurs
 
-À chaque étape, écrire UNIQUEMENT en stdout (jamais dans un fichier interne) :
+À chaque étape, écrire en stdout ET dans le progress log :
 
 ```
 [FACTORY_PROGRESS] step=<N>/10 phase=<phase-name> status=<started|done|failed> ts=<ISO-8601> [duration=<X>s]
 ```
 
-La persistance est assurée par le pilote (Cowork) qui redirige le stdout vers `logs/<task_id>.claude-stdout.log` via `Start-Process`.
+### Génération du task_id et ouverture du progress log
 
-### Fonction PowerShell helper (CORRIGÉ v3.1 — stdout uniquement)
+Au tout début de l'exécution :
 
-Définir au début de l'exécution :
+```powershell
+# 1. Generer le task_id
+$TASK_ID = "$((Get-Date -Format 'yyyy-MM-ddTHH-mm-ss'))_new-project_bootstrap-$PROJECT_NAME"
+
+# 2. Preparer le chemin progress log
+$PROGRESS_LOG = "logs\$TASK_ID.progress.log"
+New-Item -ItemType Directory -Path "logs" -Force | Out-Null
+
+# 3. OUVRIR un FileStream .NET sur le progress log
+#    Mode: Append, Acces: Write, Partage: Read (Cowork peut lire en parallele)
+$script:progressFs = [System.IO.File]::Open(
+    $PROGRESS_LOG,
+    [System.IO.FileMode]::Append,
+    [System.IO.FileAccess]::Write,
+    [System.IO.FileShare]::Read
+)
+$script:progressWriter = New-Object System.IO.StreamWriter(
+    $script:progressFs,
+    [System.Text.UTF8Encoding]::new($false)
+)
+# CRITIQUE : AutoFlush=true force l'ecriture immediate, pas de buffer
+$script:progressWriter.AutoFlush = $true
+```
+
+### Fonction PowerShell helper
 
 ```powershell
 function Write-FactoryProgress {
@@ -74,11 +98,34 @@ function Write-FactoryProgress {
     $ts = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
     $line = "[FACTORY_PROGRESS] step=$Step/$Total phase=$Phase status=$Status ts=$ts"
     if ($DurationSeconds -ge 0) { $line += " duration=${DurationSeconds}s" }
+
+    # 1. Stdout (visible par Claude Code, capte par Cowork via stdout redirect)
     Write-Host $line
+
+    # 2. Progress log dedie (lu par Cowork en parallele via Read-LogNonBlocking)
+    if ($script:progressWriter) {
+        $script:progressWriter.WriteLine($line)
+        # Pas besoin de Flush() explicite car AutoFlush=true
+    }
 }
 ```
 
-**Différence critique v3 → v3.1** : la fonction NE FAIT PLUS `Add-Content -Path $LOG_PATH`. Cette ligne causait `IOException: in use by another process` sur Windows quand Cowork avait déjà ouvert le même fichier en redirection stdout.
+### Fermeture du progress log (CRITIQUE en fin d'exécution)
+
+À la toute fin de la skill, avant le `return` final, fermer proprement le stream :
+
+```powershell
+if ($script:progressWriter) {
+    $script:progressWriter.Close()
+    $script:progressWriter = $null
+}
+if ($script:progressFs) {
+    $script:progressFs.Close()
+    $script:progressFs = $null
+}
+```
+
+Si la skill plante avant cette ligne (erreur fatale), le fichier reste ouvert jusqu'à la fin du process Claude Code, mais le contenu est déjà flushé (AutoFlush=true), donc pas de perte de données.
 
 ### Liste figée des 10 étapes
 
@@ -95,31 +142,20 @@ function Write-FactoryProgress {
 | 9 | git-commit-push | `git add`, commit, push |
 | 10 | invoke-report | Appel `factory-report` |
 
-Chaque étape doit avoir un `started` et un `done` (ou `failed`).
+Chaque étape : `started` + `done` (ou `failed`).
 
-### Génération du task_id
-
-```powershell
-$TASK_ID = "$((Get-Date -Format 'yyyy-MM-ddTHH-mm-ss'))_new-project_bootstrap-$PROJECT_NAME"
-```
-
-Ce `task_id` est transmis à `factory-report` à l'étape 10 pour que la skill puisse retrouver le bon `logs/<task_id>.claude-stdout.log` à parser.
-
-## Étapes d'exécution (avec marqueurs stdout uniquement)
+## Étapes d'exécution
 
 ### Étape 1 — Préconditions
 
 ```powershell
 Write-FactoryProgress -Step 1 -Phase "preconditions" -Status "started"
 $step1Start = Get-Date
-
-# ... toutes les vérifs préconditions ci-dessus ...
-
-$step1Duration = [int]((Get-Date) - $step1Start).TotalSeconds
-Write-FactoryProgress -Step 1 -Phase "preconditions" -Status "done" -DurationSeconds $step1Duration
+# ... verifications preconditions ...
+Write-FactoryProgress -Step 1 -Phase "preconditions" -Status "done" -DurationSeconds ([int]((Get-Date)-$step1Start).TotalSeconds)
 ```
 
-Pattern identique pour les étapes suivantes.
+Pattern identique pour les étapes 2 à 10.
 
 ### Étape 2 — Création du dossier local
 
@@ -145,7 +181,6 @@ cd frontend
 npm install
 cd ..
 
-# Tailwind v3 (plus stable que v4 pour ce POC)
 cd frontend
 npm install -D tailwindcss@3 postcss autoprefixer
 npx tailwindcss init -p
@@ -163,14 +198,14 @@ Write-FactoryProgress -Step 4 -Phase "backend-fastapi" -Status "started"
 $start = Get-Date
 
 New-Item -ItemType Directory -Path "backend" -Force | Out-Null
-# Écrire backend/main.py et backend/requirements.txt avec UTF-8 forcé
+# Ecrire backend/main.py et backend/requirements.txt avec UTF-8 force
 
 Write-FactoryProgress -Step 4 -Phase "backend-fastapi" -Status "done" -DurationSeconds ([int]((Get-Date)-$start).TotalSeconds)
 ```
 
 ### Étapes 5 à 8 — Dockerfile, config, GCP, retour racine
 
-Même pattern. Pour l'étape 7 (GCP), même si échec, marquer `done` avec note dans le CR (best-effort).
+Même pattern.
 
 ### Étape 9 — Git commit et push
 
@@ -185,8 +220,6 @@ git push origin main
 Write-FactoryProgress -Step 9 -Phase "git-commit-push" -Status "done" -DurationSeconds ([int]((Get-Date)-$start).TotalSeconds)
 ```
 
-Si push échoue : `failed` au lieu de `done`, CR sera `partial`.
-
 ### Étape 10 — Invocation factory-report
 
 ```powershell
@@ -194,25 +227,23 @@ Write-FactoryProgress -Step 10 -Phase "invoke-report" -Status "started"
 $start = Get-Date
 
 # Invoquer factory-report avec inputs :
-# phase=new-project
-# project=demo/$PROJECT_NAME
-# task_slug=bootstrap-$PROJECT_NAME
-# brief_path=<chemin brief ou null>
-# status=<success/partial/failed>
-# task_id=$TASK_ID  ← CRITIQUE : permet à factory-report de retrouver le bon claude-stdout.log
+# phase=new-project, project=demo/$PROJECT_NAME, task_slug=bootstrap-$PROJECT_NAME,
+# brief_path=<chemin brief ou null>, status=<success/partial/failed>, task_id=$TASK_ID
 
 Write-FactoryProgress -Step 10 -Phase "invoke-report" -Status "done" -DurationSeconds ([int]((Get-Date)-$start).TotalSeconds)
+
+# FERMETURE DU PROGRESS LOG (CRITIQUE)
+if ($script:progressWriter) { $script:progressWriter.Close(); $script:progressWriter = $null }
+if ($script:progressFs)     { $script:progressFs.Close();     $script:progressFs = $null }
 ```
 
 ## Contenus des fichiers à écrire (UTF-8 forcé)
 
-CRITIQUE : pour TOUS les fichiers texte écrits par cette skill, utiliser UTF-8 sans BOM :
+CRITIQUE : pour TOUS les fichiers texte écrits par cette skill, UTF-8 sans BOM :
 
 ```powershell
 [System.IO.File]::WriteAllText("chemin\fichier.ext", $contenu, [System.Text.UTF8Encoding]::new($false))
 ```
-
-Le `$false` exclut le BOM. `Out-File -Encoding utf8` par défaut écrit AVEC BOM en PS5, à éviter.
 
 ### `frontend/tailwind.config.js`
 
@@ -372,8 +403,6 @@ Generated by CGI Factory on DATE_PLACEHOLDER.
 Backend : `cd backend ; pip install -r requirements.txt ; uvicorn main:app --reload --port 8000`
 Frontend : `cd frontend ; npm install ; npm run dev`
 
-Frontend sur http://localhost:5173 (proxy /api/* vers backend:8000).
-
 ## Production build
 `docker build -t PROJECT_NAME_PLACEHOLDER .`
 `docker run -p 8080:8080 PROJECT_NAME_PLACEHOLDER`
@@ -383,10 +412,10 @@ Service : `snd-dev-svc-PROJECT_NAME_PLACEHOLDER`
 
 `gcloud run deploy snd-dev-svc-PROJECT_NAME_PLACEHOLDER --source . --region europe-west9 --project bt-ia-lab-sandbox --labels owner=quentin,project=snd,env=dev,client=internal --allow-unauthenticated`
 
-Voir `../../GCP_documentation.md` pour les règles complètes.
+Voir `../../GCP_documentation.md`.
 
 ## CI/CD
-PRs sur ce repo déclenchent automatiquement Claude Code Review via `.github/workflows/claude-review.yml` racine.
+Workflow racine `.github/workflows/claude-review.yml` review automatiquement chaque PR.
 ```
 
 Substituer `PROJECT_NAME_PLACEHOLDER`, `DESCRIPTION_PLACEHOLDER`, `DATE_PLACEHOLDER`.
@@ -406,36 +435,22 @@ Substituer `PROJECT_NAME_PLACEHOLDER`, `DESCRIPTION_PLACEHOLDER`, `DATE_PLACEHOL
 | 9 git-commit-push | Local, signaler commande | `partial` |
 | 10 invoke-report | CR à faire manuel | `partial` |
 
-Toujours invoquer `factory-report` à l'étape 10 même en cas d'échec — le status reflète l'état réel.
-
-## Exemple complet de sortie attendue
-
-Stdout pendant l'exécution (capté par Cowork via `-RedirectStandardOutput logs/<task_id>.claude-stdout.log`) :
-
-```
-[FACTORY_PROGRESS] step=1/10 phase=preconditions status=started ts=2026-05-13T15:00:00+02:00
-[FACTORY_PROGRESS] step=1/10 phase=preconditions status=done ts=2026-05-13T15:00:02+02:00 duration=2s
-[FACTORY_PROGRESS] step=2/10 phase=scaffold-dir status=started ts=2026-05-13T15:00:02+02:00
-[FACTORY_PROGRESS] step=2/10 phase=scaffold-dir status=done ts=2026-05-13T15:00:03+02:00 duration=1s
-...
-[FACTORY_PROGRESS] step=10/10 phase=invoke-report status=done ts=2026-05-13T15:06:25+02:00 duration=4s
-FACTORY_REPORT_WRITTEN=reports/2026-05-13T15-06-25_new-project_bootstrap-hello-factory-v3.md
-FACTORY_STATE_UPDATED=state/factory-state.json
-```
-
-Cowork parse ce stdout en continu pour suivre l'avancement.
+Toujours invoquer `factory-report` à l'étape 10 même en cas d'échec. **TOUJOURS fermer le progress log writer** avant de retourner, même en cas d'erreur (utiliser try/finally si possible).
 
 ## Anti-patterns
 
-- Créer un repo GitHub séparé : le projet vit dans `demo/` du repo POC_FACTORY existant.
-- Créer un workflow GitHub Action par projet : workflow racine s'applique à tout.
-- Ignorer les conventions GCP : service Cloud Run DOIT être `snd-dev-svc-<project>`, labels obligatoires.
-- Déployer sur autre projet GCP que `bt-ia-lab-sandbox`.
-- Forcer activation APIs GCP : best-effort, pas bloquant.
+- Créer un repo GitHub séparé.
+- Créer un workflow par projet.
+- Ignorer conventions GCP : service `snd-dev-svc-*`, labels obligatoires.
+- Déployer hors `bt-ia-lab-sandbox`.
+- Forcer activation APIs GCP : best-effort.
 - Dockerfile mono-stage.
 - Oublier invocation `factory-report` finale.
 - Commit `node_modules/` ou `backend/static/`.
-- URL Cloud Run hardcodée — utiliser `/api/*` relatifs.
-- Sauter les marqueurs `[FACTORY_PROGRESS]` — Cowork en dépend.
-- Écrire des fichiers sans forcer UTF-8 sans BOM.
-- **NOUVEAU v3.1 : écrire les marqueurs `[FACTORY_PROGRESS]` dans un fichier interne** — c'est ce qui causait l'IOException sur Windows. Stdout UNIQUEMENT. La persistance est gérée par le pilote (Cowork via `-RedirectStandardOutput`).
+- URL Cloud Run hardcodée — `/api/*` relatifs.
+- Sauter les marqueurs `[FACTORY_PROGRESS]`.
+- Écrire sans UTF-8 sans BOM.
+- **v3.2 : ouvrir le progress log sans `FileShare.Read`** — Cowork ne pourra plus le lire en parallèle.
+- **v3.2 : oublier `AutoFlush=$true`** — les marqueurs resteront buffés et Cowork verra le log vide jusqu'à la fin.
+- **v3.2 : oublier de fermer le writer en fin d'exécution** — le fichier reste verrouillé jusqu'à la mort du process.
+- **v3.2 : écrire les marqueurs dans `claude-stdout.log` directement** — c'est le fichier que Cowork pilote via `Start-Process`, double-write = IOException.
