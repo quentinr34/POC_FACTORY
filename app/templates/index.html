@@ -4,15 +4,43 @@
 <section class="bg-white rounded-lg border border-slate-200 p-6">
     <h2 class="text-lg font-medium mb-2">Analyser un brief</h2>
     <p class="text-sm text-slate-500 mb-4">
-        Squelette en place. La saisie et l'affichage seront implementes dans TES-11,
-        branches sur les endpoints TES-9 (analyse) et TES-6 (historique).
+        Collez un brief client, l'outil le qualifie via Claude et calcule un score 0-100.
     </p>
     <textarea
-        class="w-full h-40 border border-slate-300 rounded-md p-3 text-sm"
-        placeholder="Collez ici le brief client..."
-        disabled></textarea>
-    <button
-        class="mt-4 bg-slate-300 text-slate-600 px-4 py-2 rounded-md text-sm cursor-not-allowed"
-        disabled>Analyser (a venir)</button>
+        id="brief"
+        class="w-full h-40 border border-slate-300 rounded-md p-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
+        placeholder="Collez ici le brief client..."></textarea>
+    <div class="mt-4 flex items-center gap-3">
+        <button
+            id="analyze-btn"
+            class="bg-slate-800 text-white px-4 py-2 rounded-md text-sm hover:bg-slate-700 disabled:opacity-50">
+            Analyser
+        </button>
+        <span id="status" class="text-sm text-slate-500" role="status"></span>
+    </div>
 </section>
+
+<section id="result" class="hidden bg-white rounded-lg border border-slate-200 p-6 mt-6">
+    <div class="flex items-baseline justify-between">
+        <h2 class="text-lg font-medium">Resultat</h2>
+        <div class="text-right">
+            <span class="text-3xl font-bold" id="score">--</span>
+            <span class="text-slate-400 text-sm">/100</span>
+        </div>
+    </div>
+    <p id="summary" class="text-sm text-slate-700 mt-3"></p>
+    <div id="subscores" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 text-sm"></div>
+    <h3 class="text-sm font-semibold mt-5 mb-2">Questions de clarification</h3>
+    <ul id="questions" class="list-disc list-inside text-sm text-slate-700 space-y-1"></ul>
+</section>
+
+<section class="bg-white rounded-lg border border-slate-200 p-6 mt-6">
+    <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-medium">Historique</h2>
+        <button id="refresh-btn" class="text-sm text-slate-500 hover:text-slate-800">Rafraichir</button>
+    </div>
+    <div id="history" class="divide-y divide-slate-100 text-sm"></div>
+</section>
+
+<script src="/static/app.js"></script>
 {% endblock %}
