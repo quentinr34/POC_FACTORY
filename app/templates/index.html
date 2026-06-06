@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="bg-white rounded-lg border border-slate-200 p-6">
+    <h2 class="text-lg font-medium mb-2">Analyser un brief</h2>
+    <p class="text-sm text-slate-500 mb-4">
+        Squelette en place. La saisie et l'affichage seront implementes dans TES-11,
+        branches sur les endpoints TES-9 (analyse) et TES-6 (historique).
+    </p>
+    <textarea
+        class="w-full h-40 border border-slate-300 rounded-md p-3 text-sm"
+        placeholder="Collez ici le brief client..."
+        disabled></textarea>
+    <button
+        class="mt-4 bg-slate-300 text-slate-600 px-4 py-2 rounded-md text-sm cursor-not-allowed"
+        disabled>Analyser (a venir)</button>
+</section>
+{% endblock %}
