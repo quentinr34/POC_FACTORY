@@ -1,3 +1,5 @@
+import logging
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
@@ -6,9 +8,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app import __version__
 from app.config import Settings, get_settings
+from app.logging_config import configure_logging
 from app.models import BriefRequest, Qualification
 from app.scoring import compute_score
 from app.services.analyzer import (
@@ -22,8 +26,31 @@ from app.services.store import FirestoreStore, InMemoryStore, QualificationStore
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+configure_logging()
+logger = logging.getLogger("quote_catcher")
+
 app = FastAPI(title="Quote Catcher", version=__version__)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+class AccessLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        logger.info(
+            "request",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        return response
+
+
+app.add_middleware(AccessLogMiddleware)
 
 
 @lru_cache
