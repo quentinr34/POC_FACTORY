@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     app_name: str = "Quote Catcher"
     environment: str = "local"
 
+    use_stub_analyzer: bool = False
+
     anthropic_api_key: str = ""
     claude_model: str = "claude-3-5-sonnet-latest"
 

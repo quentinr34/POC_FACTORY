@@ -5,7 +5,7 @@ from typing import Protocol
 from pydantic import ValidationError
 
 from app.config import Settings
-from app.models import ClaudeAnalysis
+from app.models import ClaudeAnalysis, Subscores
 
 SYSTEM_PROMPT = (
     "Tu es un assistant de qualification avant-vente pour une ESN. "
@@ -55,6 +55,23 @@ def parse_analysis(raw_text: str) -> ClaudeAnalysis:
         return ClaudeAnalysis.model_validate(data)
     except ValidationError as exc:
         raise AnalyzerError(f"Reponse Claude invalide: {exc}") from exc
+
+
+class StubBriefAnalyzer:
+    """Deterministic analyzer for local demo and e2e tests (no API call)."""
+
+    model = "stub-analyzer"
+
+    def analyze(self, brief: str) -> ClaudeAnalysis:
+        return ClaudeAnalysis(
+            summary=f"Resume simule du brief ({len(brief)} caracteres).",
+            subscores=Subscores(clarity=70, budget=50, urgency=60, offer_fit=80),
+            questions=[
+                "Quel est le budget alloue au projet ?",
+                "Quelle est l'echeance souhaitee ?",
+                "Quels systemes existants doivent etre integres ?",
+            ],
+        )
 
 
 class ClaudeBriefAnalyzer:
