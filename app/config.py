@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     use_stub_analyzer: bool = False
 
     anthropic_api_key: str = ""
-    claude_model: str = "claude-3-5-sonnet-latest"
+    claude_model: str = "claude-sonnet-4-6"
 
     gcp_project_id: str = ""
     firestore_collection: str = "qualifications"

@@ -91,6 +91,7 @@ def analyze(
     try:
         analysis = analyzer.analyze(payload.brief)
     except AnalyzerError as exc:
+        logger.error("analyze_failed: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     score = compute_score(analysis.subscores, settings)

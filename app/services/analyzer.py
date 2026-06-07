@@ -78,9 +78,21 @@ class ClaudeBriefAnalyzer:
     def __init__(self, settings: Settings) -> None:
         if not settings.anthropic_api_key:
             raise AnalyzerError("ANTHROPIC_API_KEY manquante")
+        import ssl
+
+        import httpx
+        import truststore
         from anthropic import Anthropic
 
-        self._client = Anthropic(api_key=settings.anthropic_api_key, timeout=30.0)
+        # Use the OS trust store so corporate TLS-inspection CAs are honored
+        # without disabling certificate verification.
+        ssl_ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        http_client = httpx.Client(verify=ssl_ctx, timeout=30.0)
+        self._client = Anthropic(
+            api_key=settings.anthropic_api_key,
+            timeout=30.0,
+            http_client=http_client,
+        )
         self._model = settings.claude_model
 
     @property
